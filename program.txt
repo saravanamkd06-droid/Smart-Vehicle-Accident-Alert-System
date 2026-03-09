@@ -1,0 +1,197 @@
+#include <LiquidCrystal.h>
+#include <Wire.h>
+#include <TinyGPS++.h>
+#include <ArduinoIoTCloud.h>
+#include <Arduino_ConnectionHandler.h>
+// ================= LCD =================
+LiquidCrystal lcd(2, 15, 19, 18, 5, 4);
+// ================= GPS =================
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1); // use UART1 for GPS
+
+// ================= IoT Cloud =================
+const char DEVICE_LOGIN_NAME[] = "5bc25b0d-eb28-4680-ad98-a0a8605c68e3";
+const char SSID[]              = "projectiot";     
+const char PASS[]              = "123456789zzz";  
+const char DEVICE_KEY[]        = "IVIcAvCAEPA08Yncmp!Fb5fZP"; 
+
+// Cloud variables
+int obs_distance;
+bool acc;
+bool obs;
+bool status;   // added to fix missing variable
+float lat, lng;
+
+// Prototypes
+void onObsDistanceChange();
+void onLatChange();
+void onLngChange();
+void onAccChange();
+void onObsChange();
+
+const int trigPin = 27;
+const int echoPin = 26;
+long duration;
+int d;
+
+int A, B;
+
+// Gyro pins
+#define gyroPinx 34
+#define gyroPiny 35
+#define gyroPinz 32
+
+// ================= Properties =================
+void initProperties() {
+  ArduinoCloud.setBoardId(DEVICE_LOGIN_NAME);
+  ArduinoCloud.setSecretDeviceKey(DEVICE_KEY);
+
+  ArduinoCloud.addProperty(obs_distance, READWRITE, ON_CHANGE, onObsDistanceChange);
+  ArduinoCloud.addProperty(lat, READWRITE, ON_CHANGE, onLatChange);
+  ArduinoCloud.addProperty(lng, READWRITE, ON_CHANGE, onLngChange);
+  ArduinoCloud.addProperty(acc, READWRITE, ON_CHANGE, onAccChange);
+  ArduinoCloud.addProperty(obs, READWRITE, ON_CHANGE, onObsChange);
+}
+
+WiFiConnectionHandler ArduinoIoTPreferredConnection(SSID, PASS);
+
+// ================= Setup =================
+void setup() {
+  Serial.begin(9600);
+  gpsSerial.begin(9600, SERIAL_8N1, 16, 17); // GPS on RX=16, TX=17
+
+  lcd.begin(16, 2);
+
+  initProperties();
+  ArduinoCloud.begin(ArduinoIoTPreferredConnection);
+
+  setDebugMessageLevel(2);
+  ArduinoCloud.printDebugInfo();
+
+  pinMode(33, OUTPUT);  // buzzer
+  pinMode(25, OUTPUT);  // motor
+
+  pinMode(gyroPinx, INPUT);
+  pinMode(gyroPiny, INPUT);
+  pinMode(gyroPinz, INPUT);
+
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+
+  lcd.setCursor(0, 0);
+  lcd.print("vehicle accident ");
+  lcd.setCursor(0, 1);
+  lcd.print(" detection system ");
+  delay(2000);
+  lcd.clear();
+}
+
+// ================= Loop =================
+void loop() {
+  ArduinoCloud.update();
+  Gyro();
+  ultrasonic();
+
+  if ((A == 1) || (B == 1)) {
+    digitalWrite(33, HIGH);  // buzzer ON
+  } else {
+    digitalWrite(33, LOW);   // buzzer OFF
+  }
+}
+
+// ================= Ultrasonic =================
+void ultrasonic() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  duration = pulseIn(echoPin, HIGH);
+  d = duration * 0.034 / 2;
+  obs_distance = d;
+
+  lcd.setCursor(0, 0);
+  lcd.print("D:");
+  lcd.print(d);
+  lcd.print("   ");
+
+  if (d < 15) {
+    B = 1;
+    obs = false;
+  } else {
+    B = 0;
+    obs = true;
+  }
+}
+
+// ================= Gyro =================
+void Gyro() {
+  int Gyro_x = analogRead(gyroPinx); 
+  int Gyro_y = analogRead(gyroPiny); 
+  int Gyro_z = analogRead(gyroPinz); 
+
+  Serial.println("Gyro values:");
+  Serial.print("X="); Serial.println(Gyro_x);
+  Serial.print("Y="); Serial.println(Gyro_y);
+  Serial.print("Z="); Serial.println(Gyro_z);
+
+  // Simple thresholding (adjust as per your sensor calibration)
+  if ((Gyro_x < 2000 && Gyro_y < 2000 && Gyro_z < 2500)) {
+    A = 0; // no fall
+    lcd.setCursor(14, 0);
+    lcd.print("  ");
+    lcd.setCursor(14, 0);
+    lcd.print("NF");
+    digitalWrite(25, HIGH); // motor ON
+    acc = false;
+    lat = 0.00;
+    lng = 0.00;
+
+    lcd.setCursor(0, 1);
+    lcd.print("L:");
+    lcd.print(lat, 2);
+    lcd.setCursor(8, 1);
+    lcd.print("G:");
+    lcd.print(lng, 2);
+  } else {
+    A = 1; // fall detected
+    lcd.setCursor(14, 0);
+    lcd.print("  ");
+    lcd.setCursor(14, 0);
+    lcd.print("FD");
+    acc = true;
+    digitalWrite(25, LOW); // motor OFF
+    GetGPS();
+  }
+}
+
+// ================= GPS =================
+void GetGPS() {
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+    if (gps.location.isUpdated()) {
+      lat = gps.location.lat();
+      lng = gps.location.lng();
+
+      lcd.setCursor(0, 1);
+      lcd.print("L:");
+      lcd.print(lat, 4);
+      lcd.setCursor(8, 1);
+      lcd.print("G:");
+      lcd.print(lng, 4);
+
+      Serial.print("L:");
+      Serial.print(lat, 6);
+      Serial.print(" P:");
+      Serial.println(lng, 6);
+    }
+  }
+}
+
+// ================= IoT Callbacks =================
+void onAccChange() {}
+void onLatChange() {}
+void onLngChange() {}
+void onObsChange() {}
+void onObsDistanceChange() {}
